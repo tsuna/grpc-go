@@ -21,28 +21,44 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net"
+	"time"
 
-	"golang.org/x/net/context"
+	"github.com/golang/glog"
+
 	"google.golang.org/grpc"
 	pb "google.golang.org/grpc/examples/helloworld/helloworld"
 	"google.golang.org/grpc/reflection"
 )
 
 const (
-	port = ":50051"
+	port = "127.0.0.1:50051"
 )
 
 // server is used to implement helloworld.GreeterServer.
 type server struct{}
 
 // SayHello implements helloworld.GreeterServer
-func (s *server) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
-	return &pb.HelloReply{Message: "Hello " + in.Name}, nil
+func (s *server) SayHello(in *pb.HelloRequest, stream pb.Greeter_SayHelloServer) error {
+	glog.Info("server handling new stream")
+	resp := &pb.HelloReply{Message: "Hello " + in.Name}
+	for i := 0; i < 3; i++ {
+		err := stream.Send(resp)
+		glog.Info("server sending greeting")
+		if err != nil {
+			glog.Info("server return err=", err)
+			return err
+		}
+		time.Sleep(time.Second)
+	}
+	glog.Info("server return no err")
+	return nil
 }
 
 func main() {
+	flag.Parse()
 	lis, err := net.Listen("tcp", port)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)

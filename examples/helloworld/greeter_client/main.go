@@ -19,12 +19,17 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"os"
+	"time"
+
+	"github.com/golang/glog"
 
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	pb "google.golang.org/grpc/examples/helloworld/helloworld"
+	"google.golang.org/grpc/keepalive"
 )
 
 const (
@@ -33,8 +38,13 @@ const (
 )
 
 func main() {
+	flag.Parse()
 	// Set up a connection to the server.
-	conn, err := grpc.Dial(address, grpc.WithInsecure())
+	conn, err := grpc.Dial(address, grpc.WithInsecure(),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:    time.Second,
+			Timeout: 2 * time.Second,
+		}))
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}
@@ -46,9 +56,35 @@ func main() {
 	if len(os.Args) > 1 {
 		name = os.Args[1]
 	}
-	r, err := c.SayHello(context.Background(), &pb.HelloRequest{Name: name})
-	if err != nil {
-		log.Fatalf("could not greet: %v", err)
+	glog.Info("sleeping for 2 keepalives")
+	time.Sleep(2400 * time.Millisecond)
+
+	doit := func() {
+		s, err := c.SayHello(context.Background(), &pb.HelloRequest{Name: name})
+		if err != nil {
+			log.Fatalf("could not open stream: %v", err)
+		}
+		r, err := s.Recv()
+		if err != nil {
+			log.Fatalf("could not greet: %v", err)
+		}
+		glog.Infof("Greeting: %s", r.Message)
+		err = s.CloseSend()
+		glog.Info("stream closed")
+		if err != nil {
+			log.Fatalf("failed to close stream: %v", err)
+		}
 	}
-	log.Printf("Greeting: %s", r.Message)
+
+	doit()
+
+	glog.Info("sleeping for 3-4 keepalives")
+	time.Sleep(6000 * time.Millisecond)
+
+	doit()
+
+	glog.Info("sleeping for 3-4 keepalives")
+	time.Sleep(6000 * time.Millisecond)
+
+	panic("fuck")
 }

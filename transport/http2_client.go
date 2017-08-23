@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/golang/glog"
+
 	"golang.org/x/net/context"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
@@ -416,6 +418,7 @@ func (t *http2Client) NewStream(ctx context.Context, callHdr *CallHdr) (_ *Strea
 		return nil, err
 	}
 	t.mu.Lock()
+	glog.Info("NewStream() Lock()ed")
 	if t.state == draining {
 		t.mu.Unlock()
 		t.streamsQuota.add(1)
@@ -432,14 +435,18 @@ func (t *http2Client) NewStream(ctx context.Context, callHdr *CallHdr) (_ *Strea
 	// If the number of active streams change from 0 to 1, then check if keepalive
 	// has gone dormant. If so, wake it up.
 	if len(t.activeStreams) == 1 {
+		glog.Info("len(activeStreams) == 1")
 		select {
 		case t.awakenKeepalive <- struct{}{}:
+			glog.Info("wrote to awakenKeepalive")
 			t.framer.writePing(false, false, [8]byte{})
 		default:
+			glog.Info("didn't write to awakenKeepalive")
 		}
 	}
 
 	t.mu.Unlock()
+	glog.Info("NewStream() Unlock()ed")
 
 	// HPACK encodes various headers. Note that once WriteField(...) is
 	// called, the corresponding headers/continuation frame has to be sent
@@ -608,7 +615,9 @@ func (t *http2Client) CloseStream(s *Stream, err error) {
 // only once on a transport. Once it is called, the transport should not be
 // accessed any more.
 func (t *http2Client) Close() (err error) {
+	glog.Info("Close() trying to Lock()")
 	t.mu.Lock()
+	glog.Info("Close() Lock()ed")
 	if t.state == closing {
 		t.mu.Unlock()
 		return
@@ -1286,54 +1295,70 @@ func (t *http2Client) controller() {
 
 // keepalive running in a separate goroutune makes sure the connection is alive by sending pings.
 func (t *http2Client) keepalive() {
+	defer glog.Info("keepalive() returned")
+	glog.Info("in keepalive(), kp=", t.kp)
 	p := &ping{data: [8]byte{}}
 	timer := time.NewTimer(t.kp.Time)
 	for {
+		glog.Info("keepalive() loop")
 		select {
 		case <-timer.C:
+			glog.Info("keepalive() wake up 1")
 			if atomic.CompareAndSwapUint32(&t.activity, 1, 0) {
 				timer.Reset(t.kp.Time)
+				glog.Info("keepalive() Reset 1")
 				continue
 			}
 			// Check if keepalive should go dormant.
 			t.mu.Lock()
+			glog.Info("keepalive() Lock()ed")
 			if len(t.activeStreams) < 1 && !t.kp.PermitWithoutStream {
 				// Make awakenKeepalive writable.
+				glog.Info("keepalive() <-awakenKeepalive 1")
 				<-t.awakenKeepalive
 				t.mu.Unlock()
+				glog.Info("keepalive() Unlock()ed")
 				select {
 				case <-t.awakenKeepalive:
+					glog.Info("keepalive() <-awakenKeepalive 2")
 					// If the control gets here a ping has been sent
 					// need to reset the timer with keepalive.Timeout.
 				case <-t.shutdownChan:
+					glog.Info("shutdownChan 1")
 					return
 				}
 			} else {
 				t.mu.Unlock()
+				glog.Info("keepalive() Unlock()ed (more than 1 activeStreams)")
 				// Send ping.
 				t.controlBuf.put(p)
 			}
 
 			// By the time control gets here a ping has been sent one way or the other.
 			timer.Reset(t.kp.Timeout)
+			glog.Info("keepalive() Reset 2: ", t.kp.Timeout)
 			select {
 			case <-timer.C:
+				glog.Info("keepalive() wake up 2")
 				if atomic.CompareAndSwapUint32(&t.activity, 1, 0) {
 					timer.Reset(t.kp.Time)
 					continue
 				}
 				t.Close()
+				glog.Info("return CAS")
 				return
 			case <-t.shutdownChan:
 				if !timer.Stop() {
 					<-timer.C
 				}
+				glog.Info("shutdownChan 3")
 				return
 			}
 		case <-t.shutdownChan:
 			if !timer.Stop() {
 				<-timer.C
 			}
+			glog.Info("shutdownChan 4")
 			return
 		}
 	}
